@@ -1,0 +1,123 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  secrets-scan:
+    name: Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        id: gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: detect --source . --report-format sarif --report-path gitleaks-report.sarif
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks-report.sarif
+          category: gitleaks
+
+      - name: Gate on secrets found
+        if: steps.gitleaks.outcome == 'failure'
+        run: |
+          echo "Gitleaks detected one or more secrets - failing the build."
+          exit 1
+
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep
+        id: semgrep
+        continue-on-error: true
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --sarif --output semgrep-report.sarif \
+            --error \
+            ./app
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-report.sarif
+          category: semgrep
+
+      - name: Gate on findings
+        if: steps.semgrep.outcome == 'failure'
+        run: |
+          echo "Semgrep found high-confidence issues - failing the build."
+          exit 1
+
+  sca:
+    name: SCA (Dependency Scanning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (generates package-lock.json)
+        run: npm install
+        working-directory: app
+
+      - name: OSV-Scanner (SARIF for Security tab)
+        uses: google/osv-scanner-action@v1
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --format=sarif
+            --output=osv-report.sarif
+            --lockfile=app/package-lock.json
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: osv-report.sarif
+          category: osv-scanner
+
+      - name: Check for high/critical vulnerabilities
+        id: audit
+        continue-on-error: true
+        run: npm audit --audit-level=high
+        working-directory: app
+
+      - name: Gate on high/critical vulnerabilities
+        if: steps.audit.outcome == 'failure'
+        run: |
+          echo "npm audit found high/critical vulnerabilities - failing the build."
+          exit 1
