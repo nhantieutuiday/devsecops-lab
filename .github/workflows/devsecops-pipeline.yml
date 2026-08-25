@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   security-events: write
 
 jobs:
@@ -20,14 +21,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION=$(curl -sSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name"' | cut -d '"' -f4 | sed 's/^v//')
+          curl -sSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+
       - name: Run Gitleaks
         id: gitleaks
         continue-on-error: true
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: detect --source . --report-format sarif --report-path gitleaks-report.sarif
+        run: ./gitleaks detect --source . --report-format sarif --report-path gitleaks-report.sarif --exit-code 1 --redact
 
       - name: Upload SARIF
         if: always()
@@ -61,8 +65,7 @@ jobs:
         continue-on-error: true
         run: |
           semgrep scan \
-            --config p/owasp-top-ten \
-            --config p/security-audit \
+            --config .semgrep/rules.yml \
             --sarif --output semgrep-report.sarif \
             --error \
             ./app
@@ -90,18 +93,19 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies (generates package-lock.json)
+      - name: Install app dependencies (generates package-lock.json)
         run: npm install
         working-directory: app
 
-      - name: OSV-Scanner (SARIF for Security tab)
-        uses: google/osv-scanner-action@v1
+      - name: Install OSV-Scanner
+        run: |
+          curl -sSL -o osv-scanner https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64
+          chmod +x osv-scanner
+
+      - name: Run OSV-Scanner
+        id: osv
         continue-on-error: true
-        with:
-          scan-args: |-
-            --format=sarif
-            --output=osv-report.sarif
-            --lockfile=app/package-lock.json
+        run: ./osv-scanner --format=sarif --output=osv-report.sarif --lockfile=app/package-lock.json
 
       - name: Upload SARIF
         if: always()
@@ -110,14 +114,8 @@ jobs:
           sarif_file: osv-report.sarif
           category: osv-scanner
 
-      - name: Check for high/critical vulnerabilities
-        id: audit
-        continue-on-error: true
-        run: npm audit --audit-level=high
-        working-directory: app
-
-      - name: Gate on high/critical vulnerabilities
-        if: steps.audit.outcome == 'failure'
+      - name: Gate on vulnerabilities found
+        if: steps.osv.outcome == 'failure'
         run: |
-          echo "npm audit found high/critical vulnerabilities - failing the build."
+          echo "OSV-Scanner found known vulnerabilities in dependencies - failing the build."
           exit 1

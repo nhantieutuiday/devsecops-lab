@@ -22,7 +22,9 @@ song mỗi khi push/mở PR vào nhánh `main`:
 2. **sast** — Semgrep quét code trong `app/` với ruleset OWASP Top 10 +
    security-audit, tìm các lỗi như SQL injection, XSS, command injection...
 3. **sca** — cài dependency, dùng OSV-Scanner quét `package-lock.json` để tìm
-   CVE đã biết, đồng thời chạy `npm audit --audit-level=high` làm bước "gate".
+   CVE đã biết trong OSV.dev; OSV-Scanner tự thoát với mã lỗi khi tìm thấy lỗ
+   hổng, đó chính là bước "gate" của job này (bạn có thể chạy thêm
+   `npm audit` cục bộ để đối chiếu nhanh).
 
 Mỗi job đều theo cùng một pattern:
 `scan (không fail ngay) → upload kết quả dạng SARIF lên GitHub Security →

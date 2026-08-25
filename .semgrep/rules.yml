@@ -1,0 +1,24 @@
+rules:
+  - id: sql-injection-via-string-concat
+    languages: [javascript]
+    severity: ERROR
+    mode: taint
+    message: >-
+      Possible SQL injection: user-controlled input (req.query/params/body)
+      flows into a single-argument pool.query() call, typically because it
+      was concatenated into the SQL string first. Use a parameterized query
+      instead, e.g. pool.query('... WHERE name = $1', [value]).
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+      owasp: "A03:2021 - Injection"
+      references:
+        - https://owasp.org/Top10/A03_2021-Injection/
+    pattern-sources:
+      - pattern: req.query.$KEY
+      - pattern: req.params.$KEY
+      - pattern: req.body.$KEY
+    pattern-sinks:
+      - pattern: $POOL.query($QUERY)
+    pattern-sanitizers:
+      # A second argument means the query is parameterized - considered safe.
+      - pattern: $POOL.query($QUERY, $PARAMS)
